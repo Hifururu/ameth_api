@@ -1,18 +1,42 @@
-﻿import os, requests
+﻿# app/integrations/messaging.py
+import os
+from fastapi import APIRouter, HTTPException, Query
 from twilio.rest import Client
+from dotenv import load_dotenv
 
-def send_whatsapp(to_e164: str, text: str):
-    client = Client(os.getenv("TWILIO_ACCOUNT_SID"), os.getenv("TWILIO_AUTH_TOKEN"))
-    msg = client.messages.create(
-        from_=os.getenv("TWILIO_WHATSAPP_FROM"),
-        to=f"whatsapp:{to_e164}",
-        body=text
-    )
-    return {"sid": msg.sid, "status": msg.status}
+# Cargar variables del .env
+load_dotenv(override=True)
 
-def send_telegram(chat_id: str, text: str):
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    r = requests.post(url, json={"chat_id": chat_id, "text": text})
-    r.raise_for_status()
-    return r.json()
+# Este router es el que se importa en app.main
+router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+
+def _get_twilio():
+    sid   = os.getenv("TWILIO_ACCOUNT_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_ = os.getenv("TWILIO_WHATSAPP_FROM", "whatsapp:+14155238886")
+    if not sid or not token or not from_:
+        raise HTTPException(
+            status_code=500,
+            detail="Faltan credenciales TWILIO_ en .env (SID/TOKEN/FROM)"
+        )
+    return Client(sid, token), from_
+
+@router.get("/debug")
+def debug():
+    return {
+        "sid_ok":   bool(os.getenv("TWILIO_ACCOUNT_SID")),
+        "token_ok": bool(os.getenv("TWILIO_AUTH_TOKEN")),
+        "from":     os.getenv("TWILIO_WHATSAPP_FROM"),
+    }
+
+@router.post("/send")
+def send_whatsapp(
+    to:   str = Query(..., description="whatsapp:+56XXXXXXXXX"),
+    body: str = Query(..., description="Texto del mensaje"),
+):
+    try:
+        client, FROM = _get_twilio()
+        msg = client.messages.create(from_=FROM, to=to, body=body)
+        return {"ok": True, "sid": msg.sid}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
