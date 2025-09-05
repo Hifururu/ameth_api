@@ -1,0 +1,10 @@
+﻿# secretos / artefactos
+/data/
+
+# Python
+__pycache__/
+*.pyc
+
+# Entornos
+.venv/
+.env
