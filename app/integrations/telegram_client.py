@@ -1,15 +1,30 @@
-﻿import os, httpx
+﻿import os
+import requests
+from typing import Optional
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Compatibilidad: acepta TELEGRAM_BOT_TOKEN o TELEGRAM_TOKEN
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
+BASE_URL = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else None
 
-async def send_telegram(text: str):
-    if not TELEGRAM_TOKEN or not CHAT_ID:
-        raise RuntimeError("Faltan TELEGRAM_TOKEN o TELEGRAM_CHAT_ID")
+class TelegramConfigError(RuntimeError):
+    pass
+
+def send_message(text: str, chat_id: Optional[str] = None) -> dict:
+    """
+    Envía un mensaje a Telegram. Usa variables de entorno:
+    TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.
+    """
+    if not BOT_TOKEN or not BASE_URL:
+        raise TelegramConfigError("Falta TELEGRAM_BOT_TOKEN/TELEGRAM_TOKEN")
+    cid = chat_id or CHAT_ID
+    if not cid:
+        raise TelegramConfigError("Falta TELEGRAM_CHAT_ID")
     url = f"{BASE_URL}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": text}
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(url, json=payload)
-        r.raise_for_status()
-        return r.json()
+    resp = requests.post(
+        url,
+        json={"chat_id": cid, "text": text, "parse_mode": "HTML"},
+        timeout=15
+    )
+    resp.raise_for_status()
+    return resp.json()
