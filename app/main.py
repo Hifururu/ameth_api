@@ -5,7 +5,7 @@ app = FastAPI()
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "ameth", "version": "v1.4"}
+    return {"status": "ok", "service": "ameth", "version": "v1.5"}
 
 # Monta el router de messaging
 app.include_router(messaging_router)
