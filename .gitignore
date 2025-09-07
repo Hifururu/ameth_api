@@ -1,10 +1,5 @@
-﻿# secretos / artefactos
-/data/
-
-# Python
-__pycache__/
+﻿__pycache__/
 *.pyc
-
-# Entornos
-.venv/
 .env
+.vscode/
+.idea/
