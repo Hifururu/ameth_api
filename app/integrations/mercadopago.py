@@ -37,6 +37,10 @@ async def mercadopago_webhook(request: Request):
     x_req = request.headers.get("x-request-id")
     if not (x_sig and x_req) or not verify_mp_signature(x_sig, x_req, raw):
         raise HTTPException(status_code=400, detail="invalid signature")
+    print("SIG:", x_signature)
+    print("REQ:", x_request_id)
+    print("BODY:", raw.decode("utf-8"))
+
 
     payload = json.loads(raw.decode("utf-8"))
     payment_id = payload.get("data", {}).get("id")
