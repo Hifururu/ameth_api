@@ -1,65 +1,52 @@
-# ameth_api/app/main.py
+ï»¿# app/main.py
 from __future__ import annotations
+
 import os
-from fastapi import FastAPI, Request, HTTPException, Depends
+from typing import List
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
 
-# Routers (asegúrate de tener app/routers/__init__.py y finance.py)
-from app.routers.finance import router as finance_router
+# Cargar .env en local (en hosting vendrÃ¡n del sistema)
+load_dotenv(override=True)
 
-def verify_api_key(request: Request):
-    """
-    Valida la API key simple por header 'x-api-key'.
-    - Env: API_KEY (default: 'prod-xyz')
-    - Para desactivar auth globalmente: export API_KEY=""
-    """
-    expected = os.getenv("API_KEY", "prod-xyz")
-    provided = request.headers.get("x-api-key")
-    if expected and provided != expected:
-        raise HTTPException(status_code=401, detail="Invalid API key")
+# Router de WhatsApp ya tiene prefix="/whatsapp" internamente
+from app.integrations.messaging import router as whatsapp_router
 
-# Identificador de build (útil para ver despliegues)
-BUILD = os.getenv("BUILD", "ameth-2025-09-08-v2")
+
+def _origins_from_env() -> List[str]:
+    raw = os.getenv("CORS_ORIGINS", "")
+    items = [x.strip() for x in raw.split(",") if x.strip()]
+    return items or ["*"]  # por defecto permitir todo para pruebas
 
 app = FastAPI(
     title="Ameth API",
     version="v1",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    description="API base de Ameth con WhatsApp (Twilio) y healthcheck",
 )
 
-# ?? NUEVO: importa y monta el router de Mercado Pago bajo /mp
-from app.integrations.mercadopago import router as mp_router
-app.include_router(mp_router, prefix="/mp", tags=["mercado_pago"])
-# ?? NUEVO
-
-# CORS (ajusta allow_origins si quieres restringir a tu dominio)
+# --- CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_origins_from_env(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ---- Endpoints públicos (sin API key) ----
-@app.get("/health")
-def health():
-    return {"status": "ok", "service": "ameth", "version": "v1", "build": BUILD}
-
-@app.get("/")
+# --- Rutas base ---
+@app.get("/", tags=["system"])
 def root():
-    return {"status": "ok", "message": "Welcome to Ameth API", "build": BUILD}
+    return {"message": "Hello from Ameth!"}
 
-@app.get("/version")
-def version():
-    return {"build": BUILD}
+@app.get("/health", tags=["system"])
+def health():
+    return {"status": "ok", "service": "ameth", "version": "v1"}
 
-# ---- Routers protegidos por API Key ----
-# Aplica verify_api_key a TODO el router /finance (record, list, summary, delete, restore)
-app.include_router(finance_router, dependencies=[Depends(verify_api_key)])
+# --- Montar WhatsApp ---
+# OJO: NO repetir prefix aquÃ­, ya lo trae el router (quedarÃ­a /whatsapp/whatsapp)
+app.include_router(whatsapp_router)
 
 
-@app.get("/debug/routes")
-def debug_routes():
-    return [getattr(r, "path", str(r)) for r in app.router.routes]
+from app.integrations.mercadopago import router as mp_router
+app.include_router(mp_router, prefix="/mp", tags=["mercado_pago"])
