@@ -1,31 +1,76 @@
-﻿import os, hmac, hashlib, json, httpx
+﻿# app/integrations/mercadopago.py
+import os
+import json
+import hmac
+import hashlib
+from typing import Dict, Any
+
+import httpx
 from fastapi import APIRouter, Request, HTTPException
+
 router = APIRouter()
 
-MP_ACCESS_TOKEN = os.getenv("MP_ACCESS_TOKEN", "")
-MP_WEBHOOK_SECRET = os.getenv("MP_WEBHOOK_SECRET", "")
-AMETH_INTERNAL_URL = os.getenv("AMETH_INTERNAL_URL", "http://127.0.0.1:8000")
-KYARU_RECORD_ENDPOINT = os.getenv("KYARU_RECORD_ENDPOINT", "/recordFinance")
+# === Env Vars ===
+MP_ACCESS_TOKEN: str = os.getenv("MP_ACCESS_TOKEN", "")
+MP_WEBHOOK_SECRET: str = os.getenv("MP_WEBHOOK_SECRET", "")
+AMETH_INTERNAL_URL: str = os.getenv("AMETH_INTERNAL_URL", "http://127.0.0.1:8000")
+KYARU_RECORD_ENDPOINT: str = os.getenv("KYARU_RECORD_ENDPOINT", "/recordFinance")
+DEBUG_MP: bool = os.getenv("DEBUG_MP", "0") in ("1", "true", "True", "yes", "YES")
+
+# === Utils ===
+def _debug(*args):
+    if DEBUG_MP:
+        try:
+            print(*args, flush=True)
+        except Exception:
+            pass
+
+def parse_signature(sig_header: str) -> Dict[str, str]:
+    """
+    x-signature llega típicamente como: 'ts=<unix>, v1=<hex>'
+    Puede traer espacios. Devolvemos {'ts': '...', 'v1': '...'} o {}.
+    """
+    parts: Dict[str, str] = {}
+    if not sig_header:
+        return parts
+    for piece in sig_header.split(","):
+        if "=" in piece:
+            k, v = piece.split("=", 1)
+            parts[k.strip().lower()] = v.strip()
+    return parts
 
 def verify_mp_signature(x_signature: str, x_request_id: str, body: bytes) -> bool:
+    """
+    Manifest: 'id:<data.id>;request-id:<x-request-id>;ts:<ts>'
+    HMAC-SHA256 usando MP_WEBHOOK_SECRET. Comparamos con 'v1'.
+    """
     try:
-        parts = dict(p.split("=", 1) for p in (x_signature or "").split(","))
-        ts, v1 = parts.get("ts"), parts.get("v1")
-        if not (ts and v1 and x_request_id):
+        if not (x_signature and x_request_id and body):
             return False
-        data_id = str(json.loads(body.decode("utf-8")).get("data", {}).get("id", ""))
+
+        sig = parse_signature(x_signature)
+        ts = sig.get("ts")
+        v1 = sig.get("v1")
+        if not (ts and v1):
+            return False
+
+        data = json.loads(body.decode("utf-8") or "{}")
+        data_id = str(((data or {}).get("data") or {}).get("id") or "")
+
         manifest = f"id:{data_id};request-id:{x_request_id};ts:{ts}"
         digest = hmac.new(MP_WEBHOOK_SECRET.encode(), manifest.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(digest, v1)
-    except Exception:
+    except Exception as e:
+        _debug("verify_mp_signature error:", repr(e))
         return False
 
-async def kyaru_post_movimiento(mov: dict) -> None:
+async def kyaru_post_movimiento(mov: Dict[str, Any]) -> None:
     url = f"{AMETH_INTERNAL_URL.rstrip('/')}{KYARU_RECORD_ENDPOINT}"
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, json=mov)
         r.raise_for_status()
 
+# === Endpoints ===
 @router.get("/ping")
 async def mp_ping():
     return {"ok": True}
@@ -35,33 +80,55 @@ async def mercadopago_webhook(request: Request):
     raw = await request.body()
     x_sig = request.headers.get("x-signature")
     x_req = request.headers.get("x-request-id")
-    if not (x_sig and x_req) or not verify_mp_signature(x_sig, x_req, raw):
-        raise HTTPException(status_code=400, detail="invalid signature")
-    print("SIG:", x_signature)
-    print("REQ:", x_request_id)
-    print("BODY:", raw.decode("utf-8"))
 
+    # Logs de diagnóstico (activar con DEBUG_MP=1)
+    _debug("SIG:", x_sig)
+    _debug("REQ:", x_req)
+    _debug("BODY:", raw.decode("utf-8", errors="ignore"))
 
-    payload = json.loads(raw.decode("utf-8"))
-    payment_id = payload.get("data", {}).get("id")
+    # Validación condicional de firma:
+    # - si hay MP_WEBHOOK_SECRET => exigir firma válida
+    # - si no hay (vacío) => omitir validación (modo prueba)
+    if MP_WEBHOOK_SECRET:
+        if not verify_mp_signature(x_sig, x_req, raw):
+            raise HTTPException(status_code=400, detail="invalid signature")
+
+    # Parsear body
+    try:
+        payload = json.loads(raw.decode("utf-8") or "{}")
+    except Exception:
+        payload = {}
+
+    payment_id = (payload.get("data") or {}).get("id")
     if not payment_id:
+        # Nada que procesar, pero OK para no reintentar
         return {"ok": True}
 
-    headers = {"Authorization": f"Bearer {MP_ACCESS_TOKEN}"}
+    # Obtener detalle del pago desde MP
+    headers = {}
+    if MP_ACCESS_TOKEN:
+        headers["Authorization"] = f"Bearer {MP_ACCESS_TOKEN}"
+
     async with httpx.AsyncClient(timeout=30) as client:
-        rp = await client.get(f"https://api.mercadopago.com/v1/payments/{payment_id}", headers=headers)
+        rp = await client.get(
+            f"https://api.mercadopago.com/v1/payments/{payment_id}",
+            headers=headers or None
+        )
         rp.raise_for_status()
         p = rp.json()
 
+    # Mapear a movimiento de Kyaru
     status = p.get("status")
     amount = p.get("transaction_amount") or 0
-    net = p.get("transaction_details", {}).get("net_received_amount", amount)
+    net = (p.get("transaction_details") or {}).get("net_received_amount", amount)
     desc = p.get("description") or p.get("statement_descriptor") or "Mercado Pago"
     date = p.get("date_approved") or p.get("date_created")
     currency = p.get("currency_id", "CLP")
 
     collector = p.get("collector_id")
-    payer = p.get("payer", {}).get("id")
+    payer = (p.get("payer") or {}).get("id")
+
+    # Heurística simple de tipo
     tipo = "ingreso" if collector and str(collector) != str(payer) and status == "approved" else "gasto"
     if status in ["refunded", "charged_back", "cancelled", "canceled"]:
         tipo = "ajuste"
@@ -78,6 +145,12 @@ async def mercadopago_webhook(request: Request):
         "estado": status,
         "tipo": tipo,
     }
+
+    _debug("MOV→Kyaru:", mov)
+
+    # Enviar a Kyaru
     await kyaru_post_movimiento(mov)
+
     return {"ok": True}
+
 
