@@ -1,10 +1,10 @@
-﻿# ameth_api/app/main.py
+# ameth_api/app/main.py
 from __future__ import annotations
 import os
 from fastapi import FastAPI, Request, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 
-# Routers (asegúrate de tener app/routers/__init__.py y finance.py)
+# Routers (aseg�rate de tener app/routers/__init__.py y finance.py)
 from app.routers.finance import router as finance_router
 
 def verify_api_key(request: Request):
@@ -18,8 +18,8 @@ def verify_api_key(request: Request):
     if expected and provided != expected:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-# Identificador de build (útil para ver despliegues)
-BUILD = os.getenv("BUILD", "local-dev")
+# Identificador de build (�til para ver despliegues)
+BUILD = os.getenv("BUILD", "ameth-2025-09-08-v2")
 
 app = FastAPI(
     title="Ameth API",
@@ -28,10 +28,10 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# ⬇️ NUEVO: importa y monta el router de Mercado Pago bajo /mp
+# ?? NUEVO: importa y monta el router de Mercado Pago bajo /mp
 from app.integrations.mercadopago import router as mp_router
 app.include_router(mp_router, prefix="/mp", tags=["mercado_pago"])
-# ⬆️ NUEVO
+# ?? NUEVO
 
 # CORS (ajusta allow_origins si quieres restringir a tu dominio)
 app.add_middleware(
@@ -42,7 +42,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---- Endpoints públicos (sin API key) ----
+# ---- Endpoints p�blicos (sin API key) ----
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "ameth", "version": "v1", "build": BUILD}
@@ -58,3 +58,4 @@ def version():
 # ---- Routers protegidos por API Key ----
 # Aplica verify_api_key a TODO el router /finance (record, list, summary, delete, restore)
 app.include_router(finance_router, dependencies=[Depends(verify_api_key)])
+
