@@ -118,3 +118,41 @@ def export(
         media_type=mime,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+from fastapi import Body
+from pydantic import BaseModel, Field
+from typing import Optional, Literal
+from app.storage.finance_storage import _load_db, _save_db, ensure_schema, list_records
+
+@router.get("/{record_id}")
+def get_record(record_id: str):
+    for r in list_records():
+        if r.get("id") == record_id:
+            return r
+    raise HTTPException(status_code=404, detail="Registro no encontrado")
+
+class RecordUpdate(BaseModel):
+    fecha: Optional[str] = Field(None, description="YYYY-MM-DD")
+    concepto: Optional[str] = None
+    categoria: Optional[str] = None
+    monto_clp: Optional[int] = None
+    tipo: Optional[Literal["gasto","ingreso"]] = None
+
+@router.put("/{record_id}")
+def update_record(record_id: str, payload: RecordUpdate = Body(...)):
+    db = _load_db()
+    items = db.get("items", [])
+    idx = next((i for i, r in enumerate(items) if r.get("id") == record_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Registro no encontrado")
+
+    found = items[idx]
+    if payload.fecha is not None:       found["fecha"] = payload.fecha
+    if payload.concepto is not None:    found["concepto"] = payload.concepto
+    if payload.categoria is not None:   found["categoria"] = payload.categoria
+    if payload.monto_clp is not None:   found["monto_clp"] = int(payload.monto_clp)
+    if payload.tipo is not None:        found["tipo"] = payload.tipo
+
+    items[idx] = ensure_schema(found)
+    db["items"] = items
+    _save_db(db)
+    return {"ok": True, "updated": ensure_schema(found)}
