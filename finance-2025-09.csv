@@ -1,0 +1,3 @@
+id,fecha,concepto,categoria,monto_clp,tipo,created_at
+d5e0910d-3fea-44f5-a3f3-da8d3a64da3f,2025-09-08,almuerzo,comida,6000,gasto,2025-09-08T03:56:07.730834Z
+68fdb705-06ee-41f7-addc-8d8ef2450d15,2025-09-08,almuerzo,comida,5000,gasto,2025-09-08T03:56:39.932593Z

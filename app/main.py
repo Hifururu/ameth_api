@@ -11,15 +11,17 @@ from app.routers.finance import router as finance_router
 def verify_api_key(request: Request):
     """
     Valida la API key simple por header 'x-api-key'.
-    Por defecto usa API_KEY=prod-xyz si no hay env var.
+    Si no configuras API_KEY, por defecto usa 'prod-xyz'.
+    Para desactivar auth globalmente, setea API_KEY="" en env.
     """
     expected = os.getenv("API_KEY", "prod-xyz")
     provided = request.headers.get("x-api-key")
-    if not expected:  # si quieres desactivar auth, deja API_KEY=""
-        return
-    if provided != expected:
+    if expected and provided != expected:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+
+# === Identificador de build para /version y /health ===
+BUILD = os.getenv("BUILD", "local-dev")
 
 app = FastAPI(
     title="Ameth API",
@@ -28,30 +30,28 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS (ajusta origins si quieres restringir)
+# === CORS (ajusta allow_origins si quieres restringir) ===
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # cámbialo a tus dominios si prefieres
+    allow_origins=["*"],     # coloca tus dominios aquí si quieres restringir
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# -------- Health & root --------
+# === Endpoints públicos ===
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "ameth", "version": "v1"}
-
+    return {"status": "ok", "service": "ameth", "version": "v1", "build": BUILD}
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Welcome to Ameth API"}
+    return {"status": "ok", "message": "Welcome to Ameth API", "build": BUILD}
 
+@app.get("/version")
+def version():
+    return {"build": BUILD}
 
-# -------- Routers protegidos por API Key --------
-# Aplica el guard a TODO el router de finance
+# === Routers protegidos por API Key ===
+# Aplica la validación 'verify_api_key' a TODO el router /finance
 app.include_router(finance_router, dependencies=[Depends(verify_api_key)])
-
-# (Ejemplo) Si luego agregas más routers:
-# from app.routers.messaging import router as messaging_router
-# app.include_router(messaging_router, dependencies=[Depends(verify_api_key)])
