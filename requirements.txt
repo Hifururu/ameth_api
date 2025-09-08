@@ -4,3 +4,4 @@ requests>=2.31
 apscheduler>=3.10
 python-dotenv>=1.0
 tzdata
+openpyxl>=3.1.2
