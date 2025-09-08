@@ -1,158 +1,162 @@
 from __future__ import annotations
-
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Header
 from pydantic import BaseModel, Field
-from typing import Literal, Optional
+from typing import Optional, List, Literal
+from datetime import datetime, timezone
+import json, os
+from pathlib import Path
+import secrets
 
-from app.storage.finance_storage import (
-    add_record,
-    list_records,
-    summary_month,
-    delete_record as storage_delete_record,
-    clear_month as storage_clear_month,
-    dedupe_month,
-    export_month,
-)
+# ==== Seguridad simple por API Key (igual que antes) ====
+API_KEY = os.environ.get("API_XKEY", "prod-xyz")
 
-router = APIRouter(prefix="/finance", tags=["finance"])
+def check_key(x_api_key: Optional[str]):
+    if not secrets.compare_digest((x_api_key or ""), API_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
+# ==== Storage (JSON en disco, retro-compatible) ====
+DB_PATH = Path(os.environ.get("AMETH_DB_FILE", "data/finance.json"))
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
-# ====== Schemas ======
-class RecordIn(BaseModel):
-    fecha: str = Field(..., description="YYYY-MM-DD")
+def _ulid_like() -> str:
+    # Suficientemente único para este caso (puedes cambiar a 'ulid-py' si quieres)
+    return datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f") + secrets.token_hex(4)
+
+def _now_utc_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+def _load_db() -> List[dict]:
+    if not DB_PATH.exists():
+        return []
+    try:
+        with DB_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+            if isinstance(data, dict) and "items" in data:
+                data = data["items"]  # compat con formato antiguo {"items":[...]}
+            if not isinstance(data, list):
+                return []
+            # Asegura campos nuevos en registros antiguos
+            changed = False
+            for it in data:
+                if "id" not in it:
+                    it["id"] = _ulid_like()
+                    changed = True
+                if "is_deleted" not in it:
+                    it["is_deleted"] = False
+                    changed = True
+                if "deleted_at" not in it:
+                    it["deleted_at"] = None
+                    changed = True
+            if changed:
+                _save_db(data)
+            return data
+    except Exception:
+        return []
+
+def _save_db(items: List[dict]):
+    with DB_PATH.open("w", encoding="utf-8") as f:
+        json.dump(items, f, ensure_ascii=False, indent=2)
+
+# ==== Esquemas ====
+TipoMovimiento = Literal["gasto", "ingreso"]
+
+class MovimientoIn(BaseModel):
+    fecha: str  # "YYYY-MM-DD"
+    concepto: str
+    categoria: str
+    monto_clp: int = Field(ge=0)
+    tipo: TipoMovimiento
+
+class Movimiento(BaseModel):
+    id: str
+    fecha: str
     concepto: str
     categoria: str
     monto_clp: int
-    tipo: Literal["gasto", "ingreso"]
+    tipo: TipoMovimiento
+    is_deleted: bool = False
+    deleted_at: Optional[str] = None
 
+class ListResponse(BaseModel):
+    items: List[Movimiento]
 
-# ====== Endpoints ======
-@router.post("/record")
-def record_item(payload: RecordIn):
-    """
-    Crea un registro. Con idempotencia: si existe el mismo (fecha, concepto, categoria, monto, tipo),
-    devuelve el existente con created=False.
-    """
-    rec, created = add_record(
-        fecha=payload.fecha,
-        concepto=payload.concepto,
-        categoria=payload.categoria,
-        monto_clp=payload.monto_clp,
-        tipo=payload.tipo,
-        enforce_idempotency=True,
-    )
-    return {
-        "ok": True,
-        "created": created,
-        "record": rec,
-        "note": None if created else "Registro duplicado (idempotente): se devolvió el existente.",
+class SummaryResponse(BaseModel):
+    gastos: int
+    ingresos: int
+    balance: int
+
+router = APIRouter(prefix="/finance", tags=["finance"])
+
+# ==== ENDPOINTS ====
+
+@router.post("/record", response_model=dict)
+def record(mov: MovimientoIn, x_api_key: Optional[str] = Header(None)):
+    check_key(x_api_key)
+    items = _load_db()
+    new_item = {
+        "id": _ulid_like(),
+        "fecha": mov.fecha,
+        "concepto": mov.concepto,
+        "categoria": mov.categoria,
+        "monto_clp": mov.monto_clp,
+        "tipo": mov.tipo,
+        "is_deleted": False,
+        "deleted_at": None,
     }
+    items.append(new_item)
+    _save_db(items)
+    return {"ok": True, "id": new_item["id"]}
 
+@router.get("/list", response_model=ListResponse)
+def list_items(include_deleted: bool = Query(False), x_api_key: Optional[str] = Header(None)):
+    check_key(x_api_key)
+    items = _load_db()
+    if not include_deleted:
+        items = [it for it in items if not it.get("is_deleted", False)]
+    # Ordena descendente por fecha + id (opcional)
+    items.sort(key=lambda it: (it.get("fecha",""), it.get("id","")), reverse=True)
+    return {"items": items}
 
-@router.get("/list")
-def list_items(month: Optional[str] = Query(default=None, description="YYYY-MM opcional")):
+@router.get("/summary", response_model=SummaryResponse)
+def summary(month: Optional[str] = Query(None, description='YYYY-MM (ej: "2025-09")'),
+            x_api_key: Optional[str] = Header(None)):
+    check_key(x_api_key)
+    items = [it for it in _load_db() if not it.get("is_deleted", False)]
+    if month:
+        prefix = month + "-"
+        items = [it for it in items if str(it.get("fecha","")).startswith(prefix)]
+    gastos = sum(it["monto_clp"] for it in items if it["tipo"] == "gasto")
+    ingresos = sum(it["monto_clp"] for it in items if it["tipo"] == "ingreso")
+    return {"gastos": gastos, "ingresos": ingresos, "balance": ingresos - gastos}
+
+@router.delete("/{mov_id}", response_model=dict)
+def delete_mov(mov_id: str, hard: bool = Query(False), x_api_key: Optional[str] = Header(None)):
     """
-    Lista registros. Si 'month' (YYYY-MM) viene, filtra por mes.
+    Por defecto hace SOFT DELETE (oculta). Si hard=true, elimina físicamente.
     """
-    items = list_records(month=month)
-    return {"items": items, "count": len(items)}
-
-
-@router.get("/summary")
-def summary(month: str = Query(..., description="YYYY-MM")):
-    """
-    Resumen del mes: ingresos, gastos, saldo y cantidad de ítems.
-    """
-    return summary_month(month)
-
-
-@router.post("/dedupe")
-def dedupe(month: str = Query(..., description="YYYY-MM")):
-    """
-    Elimina duplicados dentro del mes basándose en la clave de idempotencia.
-    Conserva el primero cronológico.
-    """
-    removed = dedupe_month(month)
-    return {"ok": True, "month": month, "removed": removed}
-
-
-@router.post("/clear")
-def clear(month: str = Query(..., description="YYYY-MM")):
-    """
-    Borra todos los registros del mes dado.
-    """
-    removed = storage_clear_month(month)
-    return {"ok": True, "month": month, "removed": removed}
-
-
-@router.delete("/{record_id}")
-def delete_record(record_id: str):
-    """
-    Borra un registro por su ID.
-    """
-    ok = storage_delete_record(record_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
-    return {"ok": True, "deleted_id": record_id}
-
-
-@router.get("/export")
-def export(
-    month: str = Query(..., description="YYYY-MM"),
-    format: str = Query("csv", pattern="^(csv|xlsx)$"),
-):
-    """
-    Exporta registros del mes a CSV (siempre disponible) o XLSX (requiere openpyxl).
-    """
-    try:
-        data, mime, filename = export_month(month, format)
-    except RuntimeError as e:
-        # Ej.: falta 'openpyxl' para XLSX
-        raise HTTPException(status_code=400, detail=str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    return StreamingResponse(
-        iter([data]),
-        media_type=mime,
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
-from fastapi import Body
-from pydantic import BaseModel, Field
-from typing import Optional, Literal
-from app.storage.finance_storage import _load_db, _save_db, ensure_schema, list_records
-
-@router.get("/{record_id}")
-def get_record(record_id: str):
-    for r in list_records():
-        if r.get("id") == record_id:
-            return r
-    raise HTTPException(status_code=404, detail="Registro no encontrado")
-
-class RecordUpdate(BaseModel):
-    fecha: Optional[str] = Field(None, description="YYYY-MM-DD")
-    concepto: Optional[str] = None
-    categoria: Optional[str] = None
-    monto_clp: Optional[int] = None
-    tipo: Optional[Literal["gasto","ingreso"]] = None
-
-@router.put("/{record_id}")
-def update_record(record_id: str, payload: RecordUpdate = Body(...)):
-    db = _load_db()
-    items = db.get("items", [])
-    idx = next((i for i, r in enumerate(items) if r.get("id") == record_id), None)
+    check_key(x_api_key)
+    items = _load_db()
+    idx = next((i for i, it in enumerate(items) if it.get("id") == mov_id), None)
     if idx is None:
-        raise HTTPException(status_code=404, detail="Registro no encontrado")
+        raise HTTPException(status_code=404, detail="Movimiento no encontrado")
+    if hard:
+        items.pop(idx)
+        _save_db(items)
+        return {"ok": True, "deleted": "hard"}
+    else:
+        items[idx]["is_deleted"] = True
+        items[idx]["deleted_at"] = _now_utc_iso()
+        _save_db(items)
+        return {"ok": True, "deleted": "soft"}
 
-    found = items[idx]
-    if payload.fecha is not None:       found["fecha"] = payload.fecha
-    if payload.concepto is not None:    found["concepto"] = payload.concepto
-    if payload.categoria is not None:   found["categoria"] = payload.categoria
-    if payload.monto_clp is not None:   found["monto_clp"] = int(payload.monto_clp)
-    if payload.tipo is not None:        found["tipo"] = payload.tipo
-
-    items[idx] = ensure_schema(found)
-    db["items"] = items
-    _save_db(db)
-    return {"ok": True, "updated": ensure_schema(found)}
+@router.patch("/{mov_id}/restore", response_model=dict)
+def restore_mov(mov_id: str, x_api_key: Optional[str] = Header(None)):
+    check_key(x_api_key)
+    items = _load_db()
+    idx = next((i for i, it in enumerate(items) if it.get("id") == mov_id), None)
+    if idx is None:
+        raise HTTPException(status_code=404, detail="Movimiento no encontrado")
+    items[idx]["is_deleted"] = False
+    items[idx]["deleted_at"] = None
+    _save_db(items)
+    return {"ok": True, "restored": True}
