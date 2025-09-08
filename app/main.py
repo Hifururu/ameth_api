@@ -10,7 +10,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.routers.messaging import router as messaging_router
 from app.routers.finance   import router as finance_router
 
-# Scheduler job (lo envolvemos en try por si no existe el módulo en alguna build)
+# Scheduler job (defensivo por si no existe el módulo en alguna build)
 try:
     from app.services.notifications import daily_greeting_summary  # type: ignore
 except Exception:
@@ -45,7 +45,7 @@ def custom_openapi():
         "in": "header",
         "name": "x-api-key",
     }
-    # Nota: la verificación real ya la hace cada router; esto solo es documental.
+    # Nota: la verificación real la hace cada router; esto solo es documental.
     openapi_schema["security"] = [{"ApiKeyAuth": []}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
