@@ -59,3 +59,7 @@ def version():
 # Aplica verify_api_key a TODO el router /finance (record, list, summary, delete, restore)
 app.include_router(finance_router, dependencies=[Depends(verify_api_key)])
 
+
+@app.get("/debug/routes")
+def debug_routes():
+    return [getattr(r, "path", str(r)) for r in app.router.routes]
