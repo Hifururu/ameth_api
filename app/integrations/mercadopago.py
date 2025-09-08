@@ -76,3 +76,4 @@ async def mercadopago_webhook(request: Request):
     }
     await kyaru_post_movimiento(mov)
     return {"ok": True}
+
