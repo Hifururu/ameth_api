@@ -3,7 +3,14 @@ from fastapi import APIRouter, Query
 from typing import Optional
 from app.integrations.telegram import send_message
 
-router = APIRouter(prefix="/messaging", tags=["messaging"])
+from fastapi import APIRouter, Depends
+from app.security.auth import api_key_auth
+
+router = APIRouter(
+    prefix="/messaging",
+    tags=["messaging"],
+    dependencies=[Depends(api_key_auth)]  # <- exige x-api-key en TODO /messaging/*
+)
 
 @router.get("/health", summary="Messaging Health", description="Simple healthcheck para el namespace /messaging.")
 def messaging_health():

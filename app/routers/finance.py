@@ -6,7 +6,13 @@ from pydantic import BaseModel, Field, conint
 from app.storage.db import insert_record, list_records, summary_month
 from app.services.notifications import notify_finance_event
 
-router = APIRouter(prefix="/finance", tags=["finance"])
+from fastapi import APIRouter, Depends
+from app.security.auth import api_key_auth
+
+router = APIRouter(
+    prefix="/finance",
+    tags=["finance"],
+    dependencies=[Depends(api_key_auth)]  # <- exige x-api-key en TODO /finance/*
 
 class FinanceRecord(BaseModel):
     fecha: str                 # "YYYY-MM-DD"
