@@ -1,77 +1,57 @@
-﻿# app/main.py
+﻿from __future__ import annotations
+
 import os
-from typing import Optional
-from fastapi import FastAPI
-from fastapi.openapi.utils import get_openapi
-from dotenv import load_dotenv
-from apscheduler.schedulers.background import BackgroundScheduler
+from fastapi import FastAPI, Request, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
 
 # Routers
-from app.routers.messaging import router as messaging_router
-from app.routers.finance   import router as finance_router
+from app.routers.finance import router as finance_router
 
-# Scheduler job (defensivo por si no existe el módulo en alguna build)
-try:
-    from app.services.notifications import daily_greeting_summary  # type: ignore
-except Exception:
-    daily_greeting_summary = None  # type: ignore
 
-load_dotenv()
+def verify_api_key(request: Request):
+    """
+    Valida la API key simple por header 'x-api-key'.
+    Por defecto usa API_KEY=prod-xyz si no hay env var.
+    """
+    expected = os.getenv("API_KEY", "prod-xyz")
+    provided = request.headers.get("x-api-key")
+    if not expected:  # si quieres desactivar auth, deja API_KEY=""
+        return
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-app = FastAPI(title="Ameth API", version="v2.4")
 
-# Incluye routers (ya están protegidos a nivel de router con API-Key)
-app.include_router(messaging_router)
-app.include_router(finance_router)
+app = FastAPI(
+    title="Ameth API",
+    version="v1",
+    docs_url="/docs",
+    redoc_url="/redoc",
+)
 
-# Salud pública (sin auth)
-@app.get("/health", summary="Health")
+# CORS (ajusta origins si quieres restringir)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # cámbialo a tus dominios si prefieres
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# -------- Health & root --------
+@app.get("/health")
 def health():
-    return {"status": "ok", "service": "ameth", "version": app.version}
+    return {"status": "ok", "service": "ameth", "version": "v1"}
 
-# OpenAPI con esquema de API-Key (documentación)
-def custom_openapi():
-    if app.openapi_schema:
-        return app.openapi_schema
-    openapi_schema = get_openapi(
-        title=app.title,
-        version=app.version,
-        routes=app.routes,
-        description="Ameth API (Telegram + Finanzas) con API-Key.",
-    )
-    openapi_schema.setdefault("components", {}).setdefault("securitySchemes", {})
-    openapi_schema["components"]["securitySchemes"]["ApiKeyAuth"] = {
-        "type": "apiKey",
-        "in": "header",
-        "name": "x-api-key",
-    }
-    # Nota: la verificación real la hace cada router; esto solo es documental.
-    openapi_schema["security"] = [{"ApiKeyAuth": []}]
-    app.openapi_schema = openapi_schema
-    return app.openapi_schema
 
-app.openapi = custom_openapi  # type: ignore[assignment]
+@app.get("/")
+def root():
+    return {"status": "ok", "message": "Welcome to Ameth API"}
 
-# Scheduler diario (07:00 America/Santiago)
-_scheduler: Optional[BackgroundScheduler] = None
 
-@app.on_event("startup")
-def _start_scheduler():
-    global _scheduler
-    if _scheduler is None:
-        tz = os.getenv("TZ", "America/Santiago")
-        _scheduler = BackgroundScheduler(timezone=tz)
-        if callable(daily_greeting_summary):
-            _scheduler.add_job(
-                daily_greeting_summary, "cron",
-                hour=7, minute=0,
-                id="daily_summary", replace_existing=True
-            )
-        _scheduler.start()
+# -------- Routers protegidos por API Key --------
+# Aplica el guard a TODO el router de finance
+app.include_router(finance_router, dependencies=[Depends(verify_api_key)])
 
-@app.on_event("shutdown")
-def _stop_scheduler():
-    global _scheduler
-    if _scheduler:
-        _scheduler.shutdown(wait=False)
-        _scheduler = None
+# (Ejemplo) Si luego agregas más routers:
+# from app.routers.messaging import router as messaging_router
+# app.include_router(messaging_router, dependencies=[Depends(verify_api_key)])
