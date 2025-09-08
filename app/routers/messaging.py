@@ -1,64 +1,41 @@
 # app/routers/messaging.py
-from fastapi import APIRouter, Query
-from typing import Optional
-from app.integrations.telegram import send_message
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, HTTPException
 from app.security.auth import api_key_auth
 
+# Para enviar mensajes a Telegram
+from app.integrations.telegram import send_message
+
+# Protege TODO /messaging/* con API-Key
 router = APIRouter(
     prefix="/messaging",
     tags=["messaging"],
-    dependencies=[Depends(api_key_auth)]  # <- exige x-api-key en TODO /messaging/*
+    dependencies=[Depends(api_key_auth)],
 )
 
-@router.get("/health", summary="Messaging Health", description="Simple healthcheck para el namespace /messaging.")
-def messaging_health():
-    return {"ok": True, "service": "messaging"}
-
-# --- WhatsApp (placeholder para verificar webhook de Meta) ---
-@router.get(
-    "/whatsapp/webhook",
-    summary="Whatsapp Verify",
-    description="Verificación del webhook (Meta envía un GET con hub.*). Devuelve el 'challenge' si el token coincide."
-)
-def whatsapp_verify(
-    mode: Optional[str] = None,
-    challenge: Optional[str] = None,
-    verify_token: Optional[str] = None,
-    hub_mode: Optional[str] = None,
-    hub_challenge: Optional[str] = None,
-    hub_verify_token: Optional[str] = None,
-):
-    token = verify_token or hub_verify_token
-    # Cambia "CHANGE_ME_TOKEN" por el token que configures en Meta
-    if token and token == "CHANGE_ME_TOKEN":
-        return challenge or hub_challenge or "ok"
-    return "ok"
-
-@router.post(
-    "/whatsapp/webhook",
-    summary="Whatsapp Webhook",
-    description="Recepción de eventos de WhatsApp Cloud API (placeholder)."
-)
-def whatsapp_webhook():
-    return {"ok": True}
-
-# --- Telegram ---
-@router.post(
-    "/telegram/test",
-    summary="Telegram Test",
-    description="Envía un mensaje fijo a tu chat para verificar conectividad. Requiere TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID."
-)
+@router.post("/telegram/test", summary="Telegram Test",
+             description="Envía un mensaje fijo a tu chat para verificar conectividad. Requiere TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID.")
 def telegram_test():
-    res = send_message("Hola Felipe 👋, Ameth ya está conectado a Telegram ✅")
-    return {"ok": True, "telegram": res.get("ok", False), "result": res.get("result")}
+    text = "Hola Felipe 👋, Ameth ya está conectado a Telegram ✅"
+    try:
+        res = send_message(text)
+        return {"ok": True, "telegram": True, "result": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Telegram error: {e}")
 
-@router.post(
-    "/telegram/send",
-    summary="Telegram Send",
-    description="Envía un mensaje personalizado a tu chat de Telegram. Uso: POST /messaging/telegram/send?text=Hola%20mundo"
-)
+@router.post("/telegram/send", summary="Telegram Send",
+             description="Envía un mensaje personalizado a tu chat de Telegram. Uso: POST /messaging/telegram/send?text=Hola%20mundo")
 def telegram_send(text: str = Query(..., description="Texto del mensaje a enviar a tu Telegram")):
-    res = send_message(text)
-    return {"ok": True, "telegram": res.get("ok", False), "result": res.get("result")}
+    try:
+        res = send_message(text)
+        return {"ok": True, "telegram": True, "result": res}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Telegram error: {e}")
+
+# --- WhatsApp deshabilitado (oculto del esquema) ---
+@router.get("/whatsapp/webhook", include_in_schema=False)
+def whatsapp_verify(*_, **__):
+    raise HTTPException(status_code=404, detail="WhatsApp deshabilitado")
+
+@router.post("/whatsapp/webhook", include_in_schema=False)
+def whatsapp_webhook():
+    raise HTTPException(status_code=404, detail="WhatsApp deshabilitado")

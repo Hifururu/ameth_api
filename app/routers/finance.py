@@ -1,50 +1,35 @@
 # app/routers/finance.py
-from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, conint
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field
 
-from app.storage.db import insert_record, list_records, summary_month
-from app.services.notifications import notify_finance_event
-
-from fastapi import APIRouter, Depends
 from app.security.auth import api_key_auth
+from app.storage.db import record_item, list_items, month_summary
 
+# Protege TODO /finance/* con API-Key
 router = APIRouter(
     prefix="/finance",
     tags=["finance"],
-    dependencies=[Depends(api_key_auth)]  # <- exige x-api-key en TODO /finance/*
+    dependencies=[Depends(api_key_auth)],
+)
 
 class FinanceRecord(BaseModel):
-    fecha: str                 # "YYYY-MM-DD"
-    concepto: str
-    categoria: str
-    monto_clp: conint(ge=0)
-    tipo: str = Field(pattern="^(gasto|ingreso)$")
+    fecha: str = Field(..., title="Fecha")  # YYYY-MM-DD
+    concepto: str = Field(..., title="Concepto")
+    categoria: str = Field(..., title="Categoria")
+    monto_clp: int = Field(..., ge=0, title="Monto Clp")
+    tipo: str = Field(..., pattern="^(gasto|ingreso)$", title="Tipo")  # gasto|ingreso
 
-@router.post("/record")
-def record_item(item: FinanceRecord):
-    try:
-        payload = item.model_dump()
-        payload["ts"] = datetime.now(timezone.utc).isoformat()
-        insert_record(payload)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al guardar: {e}")
+@router.post("/record", summary="Record Item")
+def record_item_endpoint(payload: FinanceRecord):
+    ok = record_item(payload.model_dump())
+    return {"ok": ok}
 
-    # Notificar (silencioso si falla)
-    notify_finance_event(item.tipo, item.concepto, item.monto_clp, item.categoria)
-    return {"ok": True}
+@router.get("/list", summary="List Items")
+def list_items_endpoint():
+    items = list_items()
+    count = len(items) if isinstance(items, list) else items.get("count", 0)
+    return {"items": items, "count": count}
 
-@router.get("/list")
-def list_items():
-    try:
-        items = list_records()
-        return {"items": items, "count": len(items)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error al listar: {e}")
-
-@router.get("/summary")
-def summary(month: str):
-    try:
-        return summary_month(month)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error en summary: {e}")
+@router.get("/summary", summary="Summary")
+def summary_finance(month: str = Query(..., description="YYYY-MM")):
+    return month_summary(month)

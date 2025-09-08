@@ -1,8 +1,13 @@
-﻿import os
+﻿# app/security/auth.py
+import os
 from typing import Set
 from fastapi import Header, HTTPException, status
 
 def _get_keys() -> Set[str]:
+    """
+    Lee claves válidas desde API_KEYS (coma-separadas) o API_KEY.
+    Ej: API_KEYS="dev123,prod-456"
+    """
     raw = os.getenv("API_KEYS") or os.getenv("API_KEY") or ""
     return {k.strip() for k in raw.split(",") if k.strip()}
 

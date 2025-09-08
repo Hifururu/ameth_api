@@ -1,5 +1,7 @@
-﻿import os
-from fastapi import FastAPI, Depends
+﻿# app/main.py
+import os
+from typing import Optional
+from fastapi import FastAPI
 from fastapi.openapi.utils import get_openapi
 from dotenv import load_dotenv
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -8,26 +10,26 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.routers.messaging import router as messaging_router
 from app.routers.finance   import router as finance_router
 
-# Auth por API key
-from app.security.auth     import api_key_auth
-
-# Notificaciones (scheduler)
-from app.services.notifications import daily_greeting_summary
+# Scheduler job (lo envolvemos en try por si no existe el módulo en alguna build)
+try:
+    from app.services.notifications import daily_greeting_summary  # type: ignore
+except Exception:
+    daily_greeting_summary = None  # type: ignore
 
 load_dotenv()
 
-app = FastAPI(title="Ameth API", version="v2.3")
+app = FastAPI(title="Ameth API", version="v2.4")
 
-# ⚠️ Importante: SOLO estos include_router (elimina cualquier include viejo sin Depends)
-app.include_router(messaging_router, dependencies=[Depends(api_key_auth)])
-app.include_router(finance_router,   dependencies=[Depends(api_key_auth)])
+# Incluye routers (ya están protegidos a nivel de router con API-Key)
+app.include_router(messaging_router)
+app.include_router(finance_router)
 
 # Salud pública (sin auth)
 @app.get("/health", summary="Health")
 def health():
     return {"status": "ok", "service": "ameth", "version": app.version}
 
-# --- OpenAPI con esquema de API key en header x-api-key ---
+# OpenAPI con esquema de API-Key (documentación)
 def custom_openapi():
     if app.openapi_schema:
         return app.openapi_schema
@@ -43,15 +45,15 @@ def custom_openapi():
         "in": "header",
         "name": "x-api-key",
     }
-    # Nota: Esto solo documenta; la verificación real la hace Depends(api_key_auth).
+    # Nota: la verificación real ya la hace cada router; esto solo es documental.
     openapi_schema["security"] = [{"ApiKeyAuth": []}]
     app.openapi_schema = openapi_schema
     return app.openapi_schema
 
 app.openapi = custom_openapi  # type: ignore[assignment]
 
-# --- Scheduler diario (07:00 America/Santiago) ---
-_scheduler: BackgroundScheduler | None = None
+# Scheduler diario (07:00 America/Santiago)
+_scheduler: Optional[BackgroundScheduler] = None
 
 @app.on_event("startup")
 def _start_scheduler():
@@ -59,14 +61,12 @@ def _start_scheduler():
     if _scheduler is None:
         tz = os.getenv("TZ", "America/Santiago")
         _scheduler = BackgroundScheduler(timezone=tz)
-        _scheduler.add_job(
-            daily_greeting_summary,
-            "cron",
-            hour=7,
-            minute=0,
-            id="daily_summary",
-            replace_existing=True,
-        )
+        if callable(daily_greeting_summary):
+            _scheduler.add_job(
+                daily_greeting_summary, "cron",
+                hour=7, minute=0,
+                id="daily_summary", replace_existing=True
+            )
         _scheduler.start()
 
 @app.on_event("shutdown")
