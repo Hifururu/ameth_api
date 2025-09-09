@@ -50,3 +50,21 @@ app.include_router(whatsapp_router)
 
 from app.integrations.mercadopago import router as mp_router
 app.include_router(mp_router, prefix="/mp", tags=["mercado_pago"])
+
+# === auto-include finance router ===
+finance = None
+try:
+    # preferir import relativo (estamos dentro del paquete 'app')
+    from .routers import finance as finance
+except Exception as e1:
+    try:
+        from app.routers import finance as finance
+    except Exception as e2:
+        print(f"Finance router not loaded: {e1 or e2}")
+
+if finance:
+    try:
+        app.include_router(finance.router, prefix="/finance", tags=["finance"])
+    except Exception as e:
+        print(f"Finance router include failed: {e}")
+# === end auto-include ===

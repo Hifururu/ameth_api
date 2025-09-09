@@ -1,0 +1,13 @@
+[
+  {
+    "id": "20250909160750830894",
+    "date": "2025-09-09",
+    "concept": "almuerzo",
+    "category": "comida",
+    "amount_clp": 8000,
+    "type": "gasto",
+    "source": null,
+    "external_id": null,
+    "hidden": false
+  }
+]
